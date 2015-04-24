@@ -87,6 +87,8 @@ class SchemeType {
   SchemeType(shared_ptr<SchemeType> car, shared_ptr<SchemeType> cdr) :
       ty_(SexpType::CONS), car_(car), cdr_(cdr) { }
 
+  void print(ostream& os);
+
  private:
   SexpType ty_;
   int num_;
@@ -147,8 +149,6 @@ shared_ptr<SchemeType> SchemeParser::readSexpList(bool allowDot) {
 
 //-----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
-  cout << "hello world" << endl;
-
   Tokenizer t(cin);
   cout << t.next().id_
        << endl
