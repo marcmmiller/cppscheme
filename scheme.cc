@@ -98,7 +98,10 @@ SchemeToken Tokenizer::next() {
 class SchemeType;
 class SchemeClosure;
 
-using BuiltinFunc = function<SchemeType(vector<SchemeType>&)>;
+// TODO: this is a shared_ptr due to a c++ compiler bug not present in clang;
+//  seems like something to do with using SchemeType before definition.
+//  Bummer that these have to be heap-allocated but oh well...
+using BuiltinFunc = function<shared_ptr<SchemeType>(vector<SchemeType>&)>;
 
 //-----------------------------------------------------------------------------
 class SchemeType {
@@ -456,7 +459,10 @@ class SchemeAnalyzer {
         back_inserter(eArgs),
         [&env](Expr expr) { return expr(env); });
       if (eFunc.sexpType() == SchemeType::SexpType::BUILTIN) {
-        return (eFunc.builtin())(eArgs);
+        // workaround for gnu compiler bug
+        shared_ptr<SchemeType> unwrap_me = (eFunc.builtin())(eArgs);
+        SchemeType cpy = *unwrap_me;
+        return cpy;
       } else {
         assert(eFunc.sexpType() == SchemeType::SexpType::CLOSURE);
         auto closure = eFunc.closure();
@@ -488,29 +494,15 @@ int main(int argc, char* argv[]) {
   SchemeAnalyzer a;
   shared_ptr<Frame> env = make_shared<Frame>(nullptr);
 
-
-  function<SchemeType(vector<SchemeType>&)> func =
-      [](vector<SchemeType>& args) {
-    return SchemeType(
-        std::accumulate(args.begin(), args.end(), 0,
-                        [](int a, SchemeType& b) {
-                          return a + b.num();
-                        }));
-  };
-
-  //BuiltinFunc f2 = func;
-
   (*env)["x"] = SchemeType(999);
-  /*
   (*env)["+"] = SchemeType(
-      [](vector<SchemeType>* args) {
-        return SchemeType(
-            std::accumulate(args->begin(), args->end(), 0,
+      [](vector<SchemeType>& args) {
+        return make_shared<SchemeType>(
+            std::accumulate(args.begin(), args.end(), 0,
                             [](int a, SchemeType& b) {
                               return a + b.num();
                             }));
       });
-  */
 
   while (cin.good()) {
     SchemeType sexp(p.readSexp());
