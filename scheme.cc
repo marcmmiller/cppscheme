@@ -162,16 +162,16 @@ class SchemeType {
 SchemeType schemeNil = SchemeType::SexpType::NIL;
 
 struct scheme_iterator {
-  scheme_iterator(SchemeType& sexp) : cur_(sexp) { }
+  scheme_iterator(SchemeType& sexp) : cur_(&sexp) { }
 
   bool operator!=(scheme_iterator& other) const {
     // TODO: this is "good enough" but should be fixed
-    return cur_.sexpType() != other.cur_.sexpType();
+    return cur_->sexpType() != other.cur_->sexpType();
   }
-  void operator++() { cur_ = cur_.cdr(); }
-  SchemeType& operator*() const { return cur_; }
+  void operator++() { cur_ = &(cur_->cdr()); }
+  SchemeType& operator*() const { return cur_->car(); }
 
-  SchemeType& cur_;
+  SchemeType* cur_;
 
   typedef forward_iterator_tag iterator_category;
   typedef shared_ptr<SchemeType> value_type;
@@ -227,6 +227,10 @@ void SchemeType::print(ostream& os) {
     os << "*ERROR*";
     break;
   }
+}
+
+ostream& operator<<(ostream& os, SchemeType& st) {
+  st.print(os);
 }
 
 // TODO: this implementation assumes the last element is nil
