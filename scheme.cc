@@ -5,6 +5,7 @@
 #include <memory>
 #include <numeric>
 #include <stack>
+#include <tuple>
 #include <vector>
 #include <unordered_map>
 
@@ -97,8 +98,7 @@ SchemeToken Tokenizer::next() {
 class SchemeType;
 class SchemeClosure;
 
-using BuiltinFunc =
-    function<shared_ptr<SchemeType>(vector<shared_ptr<SchemeType> >)>;
+using BuiltinFunc = function<SchemeType(vector<SchemeType>&)>;
 
 //-----------------------------------------------------------------------------
 class SchemeType {
@@ -112,8 +112,10 @@ class SchemeType {
   SchemeType(string id) : ty_(SexpType::ID), id_(id) { }
   SchemeType() : ty_(SexpType::ERR) { }
   SchemeType(SexpType ty) : ty_(ty) { }
-  SchemeType(shared_ptr<SchemeType> car, shared_ptr<SchemeType> cdr) :
-      ty_(SexpType::CONS), car_(car), cdr_(cdr) { }
+  SchemeType(SchemeType car, SchemeType cdr) :
+      ty_(SexpType::CONS),
+      cons_(make_shared<pair<SchemeType, SchemeType>>(
+          std::move(car), std::move(cdr))) { }
   SchemeType(BuiltinFunc&& builtin) :
       ty_(SexpType::BUILTIN), builtin_(builtin) { }
   SchemeType(shared_ptr<SchemeClosure> closure) :
@@ -126,11 +128,11 @@ class SchemeType {
   }
 
   SexpType sexpType() { return ty_; }
-  const string& id() { return id_; }
+  const string& id() const { return id_; }
   int num() { return num_; }
   bool boolVal() { return boolVal_; }
-  shared_ptr<SchemeType> car() { return car_; }
-  shared_ptr<SchemeType> cdr() { return cdr_; }
+  SchemeType& car() { return cons_->first;  }
+  SchemeType& cdr() { return cons_->second; }
   BuiltinFunc& builtin() { return builtin_; }
   shared_ptr<SchemeClosure> closure() { return closure_; }
 
@@ -148,26 +150,25 @@ class SchemeType {
   int num_;
   string id_;
   bool boolVal_;
-  shared_ptr<SchemeType> car_;
-  shared_ptr<SchemeType> cdr_;
+
+  shared_ptr<pair<SchemeType, SchemeType> > cons_;
   BuiltinFunc builtin_;
   shared_ptr<SchemeClosure> closure_;
 };
 
-shared_ptr<SchemeType> schemeNil =
-    make_shared<SchemeType>(SchemeType::SexpType::NIL);
+SchemeType schemeNil = SchemeType::SexpType::NIL;
 
 struct scheme_iterator {
-  scheme_iterator(shared_ptr<SchemeType> sexp) : cur_(sexp) { }
+  scheme_iterator(SchemeType& sexp) : cur_(sexp) { }
 
   bool operator!=(scheme_iterator& other) const {
     // TODO: this is "good enough" but should be fixed
-    return cur_->sexpType() != other.cur_->sexpType();
+    return cur_.sexpType() != other.cur_.sexpType();
   }
-  void operator++() { cur_ = cur_->cdr(); }
-  shared_ptr<SchemeType> operator*() const { return cur_->car(); }
+  void operator++() { cur_ = cur_.cdr(); }
+  SchemeType& operator*() const { return cur_; }
 
-  shared_ptr<SchemeType> cur_;
+  SchemeType& cur_;
 
   typedef forward_iterator_tag iterator_category;
   typedef shared_ptr<SchemeType> value_type;
@@ -176,17 +177,17 @@ struct scheme_iterator {
   typedef shared_ptr<SchemeType>& reference;
 };
 
-scheme_iterator begin(shared_ptr<SchemeType> sexp) {
+scheme_iterator begin(SchemeType& sexp) {
   return scheme_iterator(sexp);
 }
 
-scheme_iterator end(shared_ptr<SchemeType> sexp) {
+scheme_iterator end(SchemeType& sexp) {
   return schemeNil;
 }
 
-void printAll(shared_ptr<SchemeType> sexp) {
+void printAll(SchemeType& sexp) {
   for (auto s : sexp) {
-    s->print(cout);
+    s.print(cout);
     cout << endl;
   }
 }
@@ -205,9 +206,9 @@ void SchemeType::print(ostream& os) {
   case SexpType::CONS:
     // TODO!
     os << '(';
-    car_->print(os);
+    cons_->first.print(os);
     os << " . ";
-    cdr_->print(os);
+    cons_->second.print(os);
     os << ')';
     break;
   case SexpType::NIL:
@@ -226,21 +227,19 @@ void SchemeType::print(ostream& os) {
 }
 
 // TODO: this implementation assumes the last element is nil
-vector<shared_ptr<SchemeType> > schemeListToVector(
-    shared_ptr<SchemeType> sexp) {
-  vector<shared_ptr<SchemeType> > vec;
-  std::copy(begin(sexp->cdr()), end(sexp->cdr()),
-            back_inserter(vec));
+vector<SchemeType> schemeListToVector(SchemeType& sexp) {
+  vector<SchemeType> vec;
+  std::copy(begin(sexp), end(sexp), back_inserter(vec));
   return vec;
 }
 
-shared_ptr<SchemeType> mapCar(
-    function<shared_ptr<SchemeType>(shared_ptr<SchemeType>)> fn,
-    shared_ptr<SchemeType> list) {
-  return std::accumulate(begin(list), end(list), schemeNil,
-    [](shared_ptr<SchemeType> a, shared_ptr<SchemeType> i) {
-      return make_shared<SchemeType>(i, a);
-    });
+SchemeType mapCar(function<SchemeType(SchemeType&)> fn,
+                  SchemeType& list) {
+  return std::accumulate(
+      begin(list), end(list), schemeNil,
+      [](SchemeType& a, SchemeType& i) {
+        return SchemeType(i, a);
+      });
 }
 
 //-----------------------------------------------------------------------------
@@ -281,29 +280,25 @@ SchemeType SchemeParser::readSexpList(bool allowDot) {
     return readSexp();
   }
   else if (tok.type() == TokenType::CP) {
-    return *(schemeNil.get());
+    return schemeNil;
   }
   else if (tok.type() == TokenType::OP) {
     SchemeType sCar(readSexpList(false));
     SchemeType sCdr(readSexpList(true));
-    return SchemeType(
-        make_shared<SchemeType>(std::move(sCar)),
-        make_shared<SchemeType>(std::move(sCdr)));
+    return SchemeType(std::move(sCar), std::move(sCdr));
   }
   else if (tok.type() == TokenType::INT ||
            tok.type() == TokenType::BOOL ||
            tok.type() == TokenType::ID) {
     tok_.unget(std::move(tok));
     SchemeType sexpForTok(readSexp());
-    return SchemeType(
-        make_shared<SchemeType>(std::move(sexpForTok)),
-        make_shared<SchemeType>(readSexpList(true)));
+    return SchemeType(std::move(sexpForTok), readSexpList(true));
   }
 }
 
 //-----------------------------------------------------------------------------
 // TODO: should use interned atoms
-using Symtab = unordered_map<string, shared_ptr<SchemeType>>;
+using Symtab = unordered_map<string, SchemeType>;
 
 class Frame : public Symtab,
               public enable_shared_from_this<Frame> {
@@ -331,15 +326,15 @@ class Frame : public Symtab,
 struct SchemeClosure {
   shared_ptr<Frame> env_;
   vector<string> argNames_;
-  function<shared_ptr<SchemeType>(shared_ptr<Frame>)> expr_;
+  function<SchemeType(shared_ptr<Frame>)> expr_;
 };
 
 //-----------------------------------------------------------------------------
-bool carIsId(shared_ptr<SchemeType>& sexp, const string& id) {
-  if (sexp->sexpType() == SchemeType::SexpType::CONS) {
-    shared_ptr<SchemeType> car = sexp->car();
-    return (car->sexpType() == SchemeType::SexpType::ID
-      && car->id() == id);
+bool carIsId(SchemeType& sexp, const string& id) {
+  if (sexp.sexpType() == SchemeType::SexpType::CONS) {
+    SchemeType& car = sexp.car();
+    return (car.sexpType() == SchemeType::SexpType::ID
+            && car.id() == id);
   }
   return false;
 }
@@ -347,98 +342,98 @@ bool carIsId(shared_ptr<SchemeType>& sexp, const string& id) {
 //-----------------------------------------------------------------------------
 class SchemeAnalyzer {
  public:
-  using Expr = function<shared_ptr<SchemeType>(shared_ptr<Frame>)>;
-  Expr analyze(shared_ptr<SchemeType> sexp) {
-    switch (sexp->sexpType()) {
+  using Expr = function<SchemeType(shared_ptr<Frame>)>;
+  Expr analyze(SchemeType& sexp) {
+    switch (sexp.sexpType()) {
     case SchemeType::SexpType::INT:
     case SchemeType::SexpType::BOOL:
       return [sexp](shared_ptr<Frame> env) { return sexp; };
     case SchemeType::SexpType::ID:
       return [sexp](shared_ptr<Frame> env) {
-        auto frame = env->findFrame(sexp->id());
+        auto frame = env->findFrame(sexp.id());
         if (frame) {
-          return (*frame)[sexp->id()];
+          return (*frame)[sexp.id()];
         } else {
-          return make_shared<SchemeType>(SchemeType::SexpType::ERR);
+          return SchemeType(SchemeType::SexpType::ERR);
         }
       };
     case SchemeType::SexpType::CONS:
       if (carIsId(sexp, "lambda"))
-        return analyzeLambda(sexp->cdr());
+        return analyzeLambda(sexp.cdr());
       else if (carIsId(sexp, "define"))
-        return analyzeDefine(sexp->cdr());
+        return analyzeDefine(sexp.cdr());
       else if (carIsId(sexp, "quote"))
-        return analyzeQuote(sexp->cdr());
+        return analyzeQuote(sexp.cdr());
       else if (carIsId(sexp, "and"))
-        return analyzeAnd(sexp->cdr());
+        return analyzeAnd(sexp.cdr());
       else
         return analyzeApplication(sexp);
       break;
     default:
       return [sexp](shared_ptr<Frame> env) {
-        return make_shared<SchemeType>(SchemeType::SexpType::ERR);
+        return SchemeType(SchemeType::SexpType::ERR);
       };
     }
   }
 
-  Expr analyzeAnd(shared_ptr<SchemeType> sexp) {
+  Expr analyzeAnd(SchemeType& sexp) {
     vector<Expr> exprs;
     std::transform(begin(sexp), end(sexp),
                    back_inserter(exprs),
-                   [this](shared_ptr<SchemeType> i) { return analyze(i); });
+                   [this](SchemeType& i) { return analyze(i); });
     return [exprs](shared_ptr<Frame> env) {
-      shared_ptr<SchemeType> last;
+      SchemeType last;
       for (auto i : exprs) {
         last = i(env);
-        if (!last->toBool()) {
-          return make_shared<SchemeType>(SchemeType::fromBool(false));
+        if (!last.toBool()) {
+          return SchemeType(SchemeType::fromBool(false));
         }
       }
       return last;
     };
   }
 
-  Expr analyzeQuote(shared_ptr<SchemeType> sexp) {
-    auto thing = sexp->car();
+  Expr analyzeQuote(SchemeType& sexp) {
+    SchemeType thing = sexp.car();
     return [thing](shared_ptr<Frame> env) {
       return thing;
     };
   }
 
-  Expr analyzeDefine(shared_ptr<SchemeType> sexp) {
-    string id = sexp->car()->id();
-    Expr val = analyze(sexp->cdr()->car());
+  Expr analyzeDefine(SchemeType& sexp) {
+    string id = sexp.car().id();
+    Expr val = analyze(sexp.cdr().car());
     return [id, val](shared_ptr<Frame> env) {
       (*env)[id] = val(env);
       return schemeNil;
     };
   }
 
-  Expr analyzeLambda(shared_ptr<SchemeType> sexp) {
+  Expr analyzeLambda(SchemeType& sexp) {
     // Extract the argument names -- those are in the car.
     vector<string> argNames;
-    std::transform(begin(sexp->car()), end(sexp->car()),
+    std::transform(begin(sexp.car()), end(sexp.car()),
                    back_inserter(argNames),
-                   [](shared_ptr<SchemeType> i) { return i->id(); });
+                   [](SchemeType& i) { return i.id(); });
 
     // Extract the argument body from the cdr.
-    Expr body = analyzeBody(sexp->cdr());
+    Expr body = analyzeBody(sexp.cdr());
     return [argNames, body](shared_ptr<Frame> env) {
       auto closure = make_shared<SchemeClosure>();
       closure->env_ = env;
       closure->argNames_ = std::move(argNames);
       closure->expr_ = body;
-      return make_shared<SchemeType>(closure);
+      return SchemeType(closure);
     };
   }
 
-  Expr analyzeBody(shared_ptr<SchemeType> sexpBody) {
+  Expr analyzeBody(SchemeType& sexpBody) {
     vector<Expr> exprs;
     std::transform(begin(sexpBody), end(sexpBody),
                    back_inserter(exprs),
-                   [this](shared_ptr<SchemeType> i) { return analyze(i); });
+                   [this](SchemeType& i) { return analyze(i); });
     return [exprs](shared_ptr<Frame> env) {
-      shared_ptr<SchemeType> res;
+      SchemeType res;
       for (auto expr : exprs) {
         res = expr(env);
       }
@@ -446,25 +441,25 @@ class SchemeAnalyzer {
     };
   }
 
-  Expr analyzeApplication(shared_ptr<SchemeType> sexp) {
-    Expr analyzedFunc = analyze(sexp->car());
+  Expr analyzeApplication(SchemeType& sexp) {
+    Expr analyzedFunc = analyze(sexp.car());
     vector<Expr> analyzedArgs;
     std::transform(
-      begin(sexp->cdr()), end(sexp->cdr()),
+      begin(sexp.cdr()), end(sexp.cdr()),
       back_inserter(analyzedArgs),
-      [this](shared_ptr<SchemeType> i) { return analyze(i); });
+      [this](SchemeType& i) { return analyze(i); });
     return [this, analyzedFunc, analyzedArgs](shared_ptr<Frame> env) {
       auto eFunc = analyzedFunc(env);
-      vector<shared_ptr<SchemeType>> eArgs;
+      vector<SchemeType> eArgs;
       std::transform(
         begin(analyzedArgs), end(analyzedArgs),
         back_inserter(eArgs),
         [&env](Expr expr) { return expr(env); });
-      if (eFunc->sexpType() == SchemeType::SexpType::BUILTIN) {
-        return (eFunc->builtin())(eArgs);
+      if (eFunc.sexpType() == SchemeType::SexpType::BUILTIN) {
+        return (eFunc.builtin())(eArgs);
       } else {
-        assert(eFunc->sexpType() == SchemeType::SexpType::CLOSURE);
-        auto closure = eFunc->closure();
+        assert(eFunc.sexpType() == SchemeType::SexpType::CLOSURE);
+        auto closure = eFunc.closure();
 
         // Create new environment frame.
         auto newEnv = make_shared<Frame>(closure->env_);
@@ -492,22 +487,38 @@ int main(int argc, char* argv[]) {
   SchemeParser p(t);
   SchemeAnalyzer a;
   shared_ptr<Frame> env = make_shared<Frame>(nullptr);
-  (*env)["x"] = make_shared<SchemeType>(999);
-  (*env)["+"] = make_shared<SchemeType>(
-      [](vector<shared_ptr<SchemeType> > args) {
-        return make_shared<SchemeType>(
-            std::accumulate(args.begin(), args.end(), 0,
-                            [](int a, shared_ptr<SchemeType> b) {
-                              return a + b->num();
+
+
+  function<SchemeType(vector<SchemeType>&)> func =
+      [](vector<SchemeType>& args) {
+    return SchemeType(
+        std::accumulate(args.begin(), args.end(), 0,
+                        [](int a, SchemeType& b) {
+                          return a + b.num();
+                        }));
+  };
+
+  //BuiltinFunc f2 = func;
+
+  (*env)["x"] = SchemeType(999);
+  /*
+  (*env)["+"] = SchemeType(
+      [](vector<SchemeType>* args) {
+        return SchemeType(
+            std::accumulate(args->begin(), args->end(), 0,
+                            [](int a, SchemeType& b) {
+                              return a + b.num();
                             }));
       });
+  */
+
   while (cin.good()) {
-    shared_ptr<SchemeType> sexp = make_shared<SchemeType>(p.readSexp());
+    SchemeType sexp(p.readSexp());
     cout << "Evaluating: ";
-    sexp->print(cout);
+    sexp.print(cout);
     cout << endl;
     auto expr = a.analyze(sexp);
-    expr(env)->print(cout);
+    expr(env).print(cout);
     cout << endl;
   }
 }
