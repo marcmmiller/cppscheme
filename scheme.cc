@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <iostream>
@@ -170,6 +171,9 @@ struct scheme_iterator {
 
   typedef forward_iterator_tag iterator_category;
   typedef shared_ptr<SchemeType> value_type;
+  typedef int difference_type;
+  typedef shared_ptr<SchemeType>* pointer;
+  typedef shared_ptr<SchemeType>& reference;
 };
 
 scheme_iterator begin(shared_ptr<SchemeType> sexp) {
@@ -244,60 +248,56 @@ class SchemeParser {
  public:
   SchemeParser(Tokenizer& tok) : tok_(tok) { }
 
-  shared_ptr<SchemeType> readSexp();
+  SchemeType readSexp();
 
  private:
-  shared_ptr<SchemeType> readSexpList(bool allowDot);
+  SchemeType readSexpList(bool allowDot);
   Tokenizer& tok_;
 };
 
-shared_ptr<SchemeType> SchemeParser::readSexp() {
+SchemeType SchemeParser::readSexp() {
   SchemeToken tok = tok_.next();
   if (tok.type() == TokenType::ERR) {
-    return make_shared<SchemeType>();
+    return SchemeType();
   }
   else if (tok.type() == TokenType::INT) {
-    return make_shared<SchemeType>(tok.num());
+    return SchemeType(tok.num());
   }
   else if (tok.type() == TokenType::ID) {
-    return make_shared<SchemeType>(tok.id());
+    return SchemeType(tok.id());
   }
   else if (tok.type() == TokenType::BOOL) {
-    return make_shared<SchemeType>(SchemeType::fromBool(tok.boolVal()));
+    return SchemeType::fromBool(tok.boolVal());
   }
   else if (tok.type() == TokenType::OP) {
     return readSexpList(false);
   }
 }
 
-shared_ptr<SchemeType> SchemeParser::readSexpList(bool allowDot) {
+SchemeType SchemeParser::readSexpList(bool allowDot) {
   SchemeToken tok = tok_.next();
   if (tok.type() == TokenType::DOT) {
     assert(allowDot);
     return readSexp();
   }
   else if (tok.type() == TokenType::CP) {
-    return schemeNil;
+    return *(schemeNil.get());
   }
   else if (tok.type() == TokenType::OP) {
-    return make_shared<SchemeType>(
-      readSexpList(false),
-      readSexpList(true));
+    SchemeType sCar(readSexpList(false));
+    SchemeType sCdr(readSexpList(true));
+    return SchemeType(
+        make_shared<SchemeType>(std::move(sCar)),
+        make_shared<SchemeType>(std::move(sCdr)));
   }
-  else if (tok.type() == TokenType::INT) {
-    return make_shared<SchemeType>(
-      make_shared<SchemeType>(tok.num()),
-      readSexpList(true));
-  }
-  else if (tok.type() == TokenType::BOOL) {
-    return make_shared<SchemeType>(
-      make_shared<SchemeType>(SchemeType::fromBool(tok.boolVal())),
-      readSexpList(true));
-  }
-  else if (tok.type() == TokenType::ID) {
-    return make_shared<SchemeType>(
-      make_shared<SchemeType>(tok.id()),
-      readSexpList(true));
+  else if (tok.type() == TokenType::INT ||
+           tok.type() == TokenType::BOOL ||
+           tok.type() == TokenType::ID) {
+    tok_.unget(std::move(tok));
+    SchemeType sexpForTok(readSexp());
+    return SchemeType(
+        make_shared<SchemeType>(std::move(sexpForTok)),
+        make_shared<SchemeType>(readSexpList(true)));
   }
 }
 
@@ -502,7 +502,7 @@ int main(int argc, char* argv[]) {
                             }));
       });
   while (cin.good()) {
-    shared_ptr<SchemeType> sexp = p.readSexp();
+    shared_ptr<SchemeType> sexp = make_shared<SchemeType>(p.readSexp());
     cout << "Evaluating: ";
     sexp->print(cout);
     cout << endl;
