@@ -10,7 +10,7 @@
 using namespace std;
 
 enum class TokenType : char {
-  ID, STR, INT, ERR, OP='(', CP=')', DOT='.'
+  ID, STR, INT, BOOL, ERR, OP='(', CP=')', DOT='.'
 };
 
 class SchemeToken {
@@ -18,15 +18,18 @@ class SchemeToken {
   SchemeToken(const TokenType ty) : ty_(ty) {}
   SchemeToken(int num) : ty_(TokenType::INT), num_(num) {}
   SchemeToken(string id) : ty_(TokenType::ID), id_(id) {}
+  SchemeToken(bool b) : ty_(TokenType::BOOL), boolVal_(b) { }
 
   TokenType type() { return ty_; }
   int num() { return num_; }
   const string& id() { return id_; }
   string& take_id() { return id_; }
+  bool boolVal() { return boolVal_; }
 
   TokenType ty_;
   int num_;
   string id_;
+  bool boolVal_;
 };
 
 bool isSchemeId(char p) {
@@ -61,19 +64,26 @@ SchemeToken Tokenizer::next() {
     if (isspace(p)) {
       continue;
     }
+    else if (p == '#') {
+      char bc = is_.get();
+      if (bc == 't' || bc == 'f')
+        return SchemeToken(bc == 't');
+      else
+        return SchemeToken(TokenType::ERR);
+    }
     else if (isSchemeId(p)) {
       string id;
       do {
         id += p;
         p = is_.get();
       } while (is_.good() && (isalnum(p) || isSchemeId(p)));
-      cin.unget();
+      is_.unget();
       return SchemeToken(std::move(id));
     }
     else if (isdigit(p)) {
       int num;
-      cin.unget();
-      cin >> num;
+      is_.unget();
+      is_ >> num;
       return SchemeToken(num);
     }
     else if (p == '(' || p == ')' || p == '.') {
@@ -94,7 +104,7 @@ class SchemeType {
  public:
   // Alternatively, should we use inheritance and polymorphism?
   enum class SexpType {
-    ID, STR, INT, ERR, CONS, BUILTIN, CLOSURE, NIL
+    ID, STR, INT, BOOL, ERR, CONS, BUILTIN, CLOSURE, NIL
   };
 
   SchemeType(int num) : ty_(SexpType::INT), num_(num) { }
@@ -108,9 +118,16 @@ class SchemeType {
   SchemeType(shared_ptr<SchemeClosure> closure) :
     ty_(SexpType::CLOSURE), closure_(closure) { }
 
+  static SchemeType fromBool(bool b) {
+    SchemeType ret(SexpType::BOOL);
+    ret.boolVal_ = b;
+    return ret;
+  }
+
   SexpType sexpType() { return ty_; }
   const string& id() { return id_; }
   int num() { return num_; }
+  bool boolVal() { return boolVal_; }
   shared_ptr<SchemeType> car() { return car_; }
   shared_ptr<SchemeType> cdr() { return cdr_; }
   BuiltinFunc& builtin() { return builtin_; }
@@ -118,12 +135,18 @@ class SchemeType {
 
   bool isNil() { return ty_ ==  SexpType::NIL; }
 
+  bool toBool() {
+    return (ty_ == SexpType::BOOL && boolVal_) ||
+      (ty_ != SexpType::BOOL);
+  }
+
   void print(ostream& os);
 
  private:
   SexpType ty_;
   int num_;
   string id_;
+  bool boolVal_;
   shared_ptr<SchemeType> car_;
   shared_ptr<SchemeType> cdr_;
   BuiltinFunc builtin_;
@@ -166,32 +189,35 @@ void printAll(shared_ptr<SchemeType> sexp) {
 
 void SchemeType::print(ostream& os) {
   switch (ty_) {
-    case SexpType::ID:
-      os << id_;
-      break;
-    case SexpType::INT:
-      os << num_;
-      break;
-    case SexpType::CONS:
-      // TODO!
-      os << '(';
-      car_->print(os);
-      os << " . ";
-      cdr_->print(os);
-      os << ')';
-      break;
-    case SexpType::NIL:
-      os << "nil";
-      break;
-    case SexpType::BUILTIN:
-      os << "*BUILTIN*";
-      break;
-    case SexpType::CLOSURE:
-      os << "*CLOSURE*";
-      break;
-    default:
-      os << "*ERROR*";
-      break;
+  case SexpType::ID:
+    os << id_;
+    break;
+  case SexpType::INT:
+    os << num_;
+    break;
+  case SexpType::BOOL:
+    os << '#' << (boolVal_ ? 't' : 'f');
+    break;
+  case SexpType::CONS:
+    // TODO!
+    os << '(';
+    car_->print(os);
+    os << " . ";
+    cdr_->print(os);
+    os << ')';
+    break;
+  case SexpType::NIL:
+    os << "nil";
+    break;
+  case SexpType::BUILTIN:
+    os << "*BUILTIN*";
+    break;
+  case SexpType::CLOSURE:
+    os << "*CLOSURE*";
+    break;
+  default:
+    os << "*ERROR*";
+    break;
   }
 }
 
@@ -236,6 +262,9 @@ shared_ptr<SchemeType> SchemeParser::readSexp() {
   else if (tok.type() == TokenType::ID) {
     return make_shared<SchemeType>(tok.id());
   }
+  else if (tok.type() == TokenType::BOOL) {
+    return make_shared<SchemeType>(SchemeType::fromBool(tok.boolVal()));
+  }
   else if (tok.type() == TokenType::OP) {
     return readSexpList(false);
   }
@@ -258,6 +287,11 @@ shared_ptr<SchemeType> SchemeParser::readSexpList(bool allowDot) {
   else if (tok.type() == TokenType::INT) {
     return make_shared<SchemeType>(
       make_shared<SchemeType>(tok.num()),
+      readSexpList(true));
+  }
+  else if (tok.type() == TokenType::BOOL) {
+    return make_shared<SchemeType>(
+      make_shared<SchemeType>(SchemeType::fromBool(tok.boolVal())),
       readSexpList(true));
   }
   else if (tok.type() == TokenType::ID) {
@@ -316,30 +350,59 @@ class SchemeAnalyzer {
   using Expr = function<shared_ptr<SchemeType>(shared_ptr<Frame>)>;
   Expr analyze(shared_ptr<SchemeType> sexp) {
     switch (sexp->sexpType()) {
-      case SchemeType::SexpType::INT:
-        return [sexp](shared_ptr<Frame> env) { return sexp; };
-      case SchemeType::SexpType::ID:
-        return [sexp](shared_ptr<Frame> env) {
-          auto frame = env->findFrame(sexp->id());
-          if (frame) {
-            return (*frame)[sexp->id()];
-          } else {
-            return make_shared<SchemeType>(SchemeType::SexpType::ERR);
-          }
-        };
-      case SchemeType::SexpType::CONS:
-        if (carIsId(sexp, "lambda"))
-          return analyzeLambda(sexp->cdr());
-        else if (carIsId(sexp, "define"))
-          return analyzeDefine(sexp->cdr());
-        else
-          return analyzeApplication(sexp);
-        break;
-      default:
-        return [sexp](shared_ptr<Frame> env) {
+    case SchemeType::SexpType::INT:
+    case SchemeType::SexpType::BOOL:
+      return [sexp](shared_ptr<Frame> env) { return sexp; };
+    case SchemeType::SexpType::ID:
+      return [sexp](shared_ptr<Frame> env) {
+        auto frame = env->findFrame(sexp->id());
+        if (frame) {
+          return (*frame)[sexp->id()];
+        } else {
           return make_shared<SchemeType>(SchemeType::SexpType::ERR);
-        };
+        }
+      };
+    case SchemeType::SexpType::CONS:
+      if (carIsId(sexp, "lambda"))
+        return analyzeLambda(sexp->cdr());
+      else if (carIsId(sexp, "define"))
+        return analyzeDefine(sexp->cdr());
+      else if (carIsId(sexp, "quote"))
+        return analyzeQuote(sexp->cdr());
+      else if (carIsId(sexp, "and"))
+        return analyzeAnd(sexp->cdr());
+      else
+        return analyzeApplication(sexp);
+      break;
+    default:
+      return [sexp](shared_ptr<Frame> env) {
+        return make_shared<SchemeType>(SchemeType::SexpType::ERR);
+      };
     }
+  }
+
+  Expr analyzeAnd(shared_ptr<SchemeType> sexp) {
+    vector<Expr> exprs;
+    std::transform(begin(sexp), end(sexp),
+                   back_inserter(exprs),
+                   [this](shared_ptr<SchemeType> i) { return analyze(i); });
+    return [exprs](shared_ptr<Frame> env) {
+      shared_ptr<SchemeType> last;
+      for (auto i : exprs) {
+        last = i(env);
+        if (!last->toBool()) {
+          return make_shared<SchemeType>(SchemeType::fromBool(false));
+        }
+      }
+      return last;
+    };
+  }
+
+  Expr analyzeQuote(shared_ptr<SchemeType> sexp) {
+    auto thing = sexp->car();
+    return [thing](shared_ptr<Frame> env) {
+      return thing;
+    };
   }
 
   Expr analyzeDefine(shared_ptr<SchemeType> sexp) {
