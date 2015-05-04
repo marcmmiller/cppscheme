@@ -273,7 +273,7 @@ void SchemeType::print(ostream& os) {
     break;
   }
   case SexpType::NIL:
-    os << "nil";
+    os << "()";
     break;
   case SexpType::BUILTIN:
     os << "*BUILTIN*";
@@ -340,13 +340,21 @@ SchemeType SchemeParser::readSexp() {
     return SchemeType(SchemeType("quote"),
                       SchemeType(readSexp(), schemeNil));
   }
+  else {
+    cerr << "syntax error" << endl;
+    return SchemeType();
+  }
 }
 
 SchemeType SchemeParser::readSexpList(bool allowDot) {
   SchemeToken tok = tok_.next();
   if (tok.type() == TokenType::DOT) {
     assert(allowDot);
-    return readSexp();
+    SchemeType ret = readSexp();
+    // consume the CP token, which must appear next
+    SchemeToken cp = tok_.next();
+    assert(cp.type() == TokenType::CP);
+    return ret;
   }
   else if (tok.type() == TokenType::CP) {
     return schemeNil;
@@ -363,6 +371,10 @@ SchemeType SchemeParser::readSexpList(bool allowDot) {
     tok_.unget(std::move(tok));
     SchemeType sexpForTok(readSexp());
     return SchemeType(std::move(sexpForTok), readSexpList(true));
+  }
+  else {
+    cerr << "syntax error in nested sexp" << endl;
+    return SchemeType();
   }
 }
 
@@ -435,6 +447,7 @@ class SchemeAnalyzer {
         if (frame) {
           return (*frame)[sexp.id()];
         } else {
+          cerr << "undefined variable: " << sexp.id() << endl;
           return SchemeType(SchemeType::SexpType::ERR);
         }
       };
@@ -762,14 +775,10 @@ int main(int argc, char* argv[]) {
   while (in->good()) {
     SchemeType sexp(p.readSexp());
     cout << "-->> " << sexp << endl;
-    auto e_sexp = sexp;
-    /*
-      UNCOMMENT WHEN MEMORY BUG IS FIXED :-(
-    //auto e_sexp(a.expandMacros(sexp));
-    //auto expr = a.analyze(e_sexp);
-    //auto r_sexp = expr(env);
-    //cout << r_sexp << endl;
-    */
+    auto e_sexp(a.expandMacros(sexp));
+    auto expr = a.analyze(e_sexp);
+    auto r_sexp = expr(env);
+    cout << r_sexp << endl;
     cout << "------- " << endl;
   }
 }
