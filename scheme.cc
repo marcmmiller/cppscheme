@@ -10,6 +10,8 @@
 #include <vector>
 #include <unordered_map>
 
+#include <string.h>
+
 using std::cin;
 using std::cout;
 using std::cerr;
@@ -505,7 +507,6 @@ class SchemeAnalyzer {
   }
 
   SchemeType expandMacros(SchemeType& sexp) {
-    cout << "expanding " << sexp << endl;
     SchemeType s = sexp;
     bool did_stuff;
     do {
@@ -687,27 +688,7 @@ class SchemeAnalyzer {
 };
 
 //-----------------------------------------------------------------------------
-int main(int argc, char* argv[]) {
-  istream* in = &cin;
-  fstream fin;
-
-  if (argc > 1) {
-    fin.open(argv[1], std::ios::in);
-    if (!fin.is_open()) {
-      cerr << "Couldn't open " << argv[1] << "." << endl;
-      std::exit(1);
-    }
-    else {
-      in = &fin;
-    }
-  }
-
-  Tokenizer t(*in);
-  SchemeParser p(t);
-  SchemeAnalyzer a;
-  shared_ptr<Frame> env = make_shared<Frame>(nullptr);
-
-  (*env)["x"] = SchemeType(999);
+void setupEnv(shared_ptr<Frame> env) {
   (*env)["+"] = SchemeType(
       [](vector<SchemeType>& args) {
         return make_shared<SchemeType>(
@@ -749,16 +730,6 @@ int main(int argc, char* argv[]) {
             SchemeType::fromBool(
                 args[0].sexpType() == SchemeType::SexpType::NIL));
       });
-  // this should really be a library function
-  (*env)["list"] = SchemeType(
-      [](vector<SchemeType>& args) {
-        return make_shared<SchemeType>(
-            std::accumulate(
-                args.rbegin(), args.rend(), schemeNil,
-                [](SchemeType& sofar, SchemeType& i) {
-                  return SchemeType(i, sofar);
-                }));
-      });
   (*env)["display"] = SchemeType(
       [](vector<SchemeType>& args) {
         for (auto a : args) {
@@ -771,14 +742,63 @@ int main(int argc, char* argv[]) {
         cout << endl;
         return make_shared<SchemeType>(schemeNil);
       });
+}
+
+//-----------------------------------------------------------------------------
+bool interpret(const char* filename,
+               SchemeAnalyzer& analyzer,
+               shared_ptr<Frame> env) {
+  istream* in = &cin;
+  fstream fin;
+
+  if (filename) {
+    fin.open(filename, std::ios::in);
+    if (!fin.is_open()) {
+      cerr << "Couldn't open " << filename << "." << endl;
+      return false;
+    }
+    else {
+      in = &fin;
+    }
+  }
+
+  Tokenizer t(*in);
+  SchemeParser p(t);
 
   while (in->good()) {
     SchemeType sexp(p.readSexp());
     cout << "-->> " << sexp << endl;
-    auto e_sexp(a.expandMacros(sexp));
-    auto expr = a.analyze(e_sexp);
+    auto e_sexp(analyzer.expandMacros(sexp));
+    auto expr = analyzer.analyze(e_sexp);
     auto r_sexp = expr(env);
     cout << r_sexp << endl;
     cout << "------- " << endl;
   }
+
+  return true;
+}
+
+
+//-----------------------------------------------------------------------------
+int main(int argc, char* argv[]) {
+  SchemeAnalyzer a;
+  shared_ptr<Frame> env = make_shared<Frame>(nullptr);
+  setupEnv(env);
+
+  if (argc == 1) {
+    argc = 2;
+    char* bogus[] = { "--", "--" };
+    argv = bogus;
+  }
+  for (int i = 1; i < argc; ++i) {
+    const char* filename = nullptr;
+    if (strcmp(argv[i], "--")) {
+      filename = argv[i];
+    }
+    if (!interpret(filename, a, env)) {
+      return 1;
+    }
+  }
+
+  return 0;
 }
