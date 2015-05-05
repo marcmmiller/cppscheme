@@ -13,11 +13,11 @@
 
 (begin 5 6 7)
 
-(define x (lambda () 5))
+(define *x* (lambda () 5))
 
-(macroify x)
+(macroify *x*)
 
-(x)
+(*x*)
 
 (define if 
   (lambda (_test _t _f)
@@ -28,4 +28,10 @@
 
 (if #f 6 5)
 
+(apply + '(1 2 3 4))
 
+(apply + 1 2 '(3 4))
+
+(map (lambda (x) (+ 10 x)) '(1 2 3 4))
+
+(map + '(0 2 5) '(5 3 0))

@@ -485,7 +485,8 @@ SchemeType SchemeClosure::apply(vector<SchemeType>& eArgs) {
   }
 
   // arguments left over?
-    if (!restArgName_.empty() && i < eArgs.size()) {
+  if (!restArgName_.empty()) {
+    if (i < eArgs.size()) {
       (*newEnv)[restArgName_] =
           std::accumulate(
               eArgs.rbegin(),
@@ -495,8 +496,28 @@ SchemeType SchemeClosure::apply(vector<SchemeType>& eArgs) {
                 return SchemeType(i, sofar);
               });
     }
+    else {
+      (*newEnv)[restArgName_] = schemeNil;
+    }
+  }
 
-    return expr_(newEnv);
+  return expr_(newEnv);
+}
+
+SchemeType callFunc(
+    SchemeType& func,
+    vector<SchemeType>& args) {
+  if (func.sexpType() == SchemeType::SexpType::BUILTIN) {
+    // workaround for gnu compiler bug
+    shared_ptr<SchemeType> unwrap_me = (func.builtin())(args);
+    SchemeType cpy = *unwrap_me;
+    return cpy;
+  }
+  else {
+    assert(func.sexpType() == SchemeType::SexpType::CLOSURE);
+    auto closure = func.closure();
+    return closure->apply(args);
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -717,16 +738,7 @@ class SchemeAnalyzer {
         begin(analyzedArgs), end(analyzedArgs),
         back_inserter(eArgs),
         [&env](Expr expr) { return expr(env); });
-      if (eFunc.sexpType() == SchemeType::SexpType::BUILTIN) {
-        // workaround for gnu compiler bug
-        shared_ptr<SchemeType> unwrap_me = (eFunc.builtin())(eArgs);
-        SchemeType cpy = *unwrap_me;
-        return cpy;
-      } else {
-        assert(eFunc.sexpType() == SchemeType::SexpType::CLOSURE);
-        auto closure = eFunc.closure();
-        return closure->apply(eArgs);
-      }
+      return callFunc(eFunc, eArgs);
     };
   }
 };
@@ -762,7 +774,7 @@ void setupEnv(shared_ptr<Frame> env) {
       [](vector<SchemeType>& args) {
         return make_shared<SchemeType>(args[0].cdr());
       });
-  (*env)["list?"] = SchemeType(
+  (*env)["pair?"] = SchemeType(
       [](vector<SchemeType>& args) {
         return make_shared<SchemeType>(
             SchemeType::fromBool(
@@ -785,6 +797,18 @@ void setupEnv(shared_ptr<Frame> env) {
       [](vector<SchemeType>& args) {
         cout << endl;
         return make_shared<SchemeType>(schemeNil);
+      });
+  (*env)["apply"] = SchemeType(
+      [](vector<SchemeType>& args) {
+        SchemeType& func = args[0];
+        vector<SchemeType> nargs;
+        std::copy(begin(args) + 1, end(args) - 1, back_inserter(nargs));
+
+        SchemeType& lst = *(end(args) - 1);
+        assert(lst.isCons());
+
+        std::copy(begin(lst), end(lst), back_inserter(nargs));
+        return make_shared<SchemeType>(callFunc(func, nargs));
       });
 }
 
@@ -813,8 +837,6 @@ bool interpret(const char* filename,
     SchemeType sexp(p.readSexp());
 
     if (carIsId(sexp, "import")) {
-      cout << sexp << endl << sexp.cdr() << endl;
-
       if (!interpret(sexp.cdr().car().str().c_str(),
                      analyzer, env)) {
         return false;
