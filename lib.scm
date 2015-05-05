@@ -27,7 +27,7 @@
   (lambda (first . rest)
     (cons first rest)))
 
-(define if 
+(define if
   (lambda (_test _t _f)
     (list 'or (list 'and _test _t) _f)))
 (macroify if)
