@@ -38,6 +38,12 @@ class SchemeToken {
   SchemeToken(string id) : ty_(TokenType::ID), id_(id) {}
   SchemeToken(bool b) : ty_(TokenType::BOOL), boolVal_(b) { }
 
+  static SchemeToken userString(string str) {
+    SchemeToken ret(TokenType::STR);
+    ret.id_ = str;
+    return ret;
+  }
+
   TokenType type() { return ty_; }
   int num() { return num_; }
   const string& id() { return id_; }
@@ -68,6 +74,9 @@ class Tokenizer {
   }
 
  private:
+  // assumes first quote has been consumed
+  string readQuotedString_();
+
   istream& is_;
   std::stack<SchemeToken> ungets_;
 };
@@ -96,6 +105,9 @@ SchemeToken Tokenizer::next() {
       std::getline(is_, tmp);
       continue;
     }
+    else if (p == '"') {
+      return SchemeToken::userString(readQuotedString_());
+    }
     else if (isSchemeId(p)) {
       string id;
       do {
@@ -118,6 +130,22 @@ SchemeToken Tokenizer::next() {
   }
 }
 
+string Tokenizer::readQuotedString_() {
+  string sofar = "";
+  while (is_.good()) {
+    char p = is_.get();
+    if (p == '"')
+      return sofar;
+    if (p == '\\') {
+      p = is_.get();
+      if (p == 'n')
+        p = '\n';
+      // TODO: add more escapes here
+    }
+    sofar += p;
+  }
+}
+
 class SchemeType;
 class SchemeClosure;
 
@@ -131,7 +159,7 @@ class SchemeType {
  public:
   // Alternatively, should we use inheritance and polymorphism?
   enum class SexpType {
-    ID, INT, BOOL, ERR, CONS, BUILTIN, CLOSURE, NIL
+    ID, INT, BOOL, STR, ERR, CONS, BUILTIN, CLOSURE, NIL
   };
 
   SchemeType(int num) : ty_(SexpType::INT), num_(num) { }
@@ -153,8 +181,15 @@ class SchemeType {
     return ret;
   }
 
+  static SchemeType userString(const string& str) {
+    SchemeType ret(SexpType::STR);
+    ret.id_ = str;
+    return ret;
+  }
+
   SexpType sexpType() { return ty_; }
   const string& id() const { return id_; }
+  const string& str() const { return id_; }
   int num() { return num_; }
   bool boolVal() { return boolVal_; }
   SchemeType& car() { return cons_->first;  }
@@ -248,44 +283,47 @@ void printAll(SchemeType& sexp) {
 
 void SchemeType::print(ostream& os) {
   switch (ty_) {
-  case SexpType::ID:
-    os << id_;
-    break;
-  case SexpType::INT:
-    os << num_;
-    break;
-  case SexpType::BOOL:
-    os << '#' << (boolVal_ ? 't' : 'f');
-    break;
-  case SexpType::CONS: {
-    // TODO!
-    os << '(';
-    cons_->first.print(os);
-    SchemeType *rest = &(cons_->second);
-    while (rest->ty_ == SexpType::CONS) {
-      os << " ";
-      rest->cons_->first.print(os);
-      rest = &(rest->cons_->second);
+    case SexpType::ID:
+      os << id_;
+      break;
+    case SexpType::STR:
+      os << '\"' << id_ << '\"';
+      break;
+    case SexpType::INT:
+      os << num_;
+      break;
+    case SexpType::BOOL:
+      os << '#' << (boolVal_ ? 't' : 'f');
+      break;
+    case SexpType::CONS: {
+      // TODO!
+      os << '(';
+      cons_->first.print(os);
+      SchemeType *rest = &(cons_->second);
+      while (rest->ty_ == SexpType::CONS) {
+        os << " ";
+        rest->cons_->first.print(os);
+        rest = &(rest->cons_->second);
+      }
+      if (rest->ty_ != SexpType::NIL) {
+        os << " . ";
+        rest->print(os);
+      }
+      os << ')';
+      break;
     }
-    if (rest->ty_ != SexpType::NIL) {
-      os << " . ";
-      rest->print(os);
-    }
-    os << ')';
-    break;
-  }
-  case SexpType::NIL:
-    os << "()";
-    break;
-  case SexpType::BUILTIN:
-    os << "*BUILTIN*";
-    break;
-  case SexpType::CLOSURE:
-    os << "*CLOSURE*";
-    break;
-  default:
-    os << "*ERROR*";
-    break;
+    case SexpType::NIL:
+      os << "()";
+      break;
+    case SexpType::BUILTIN:
+      os << "*BUILTIN*";
+      break;
+    case SexpType::CLOSURE:
+      os << "*CLOSURE*";
+      break;
+    default:
+      os << "*ERROR*";
+      break;
   }
 }
 
@@ -332,6 +370,9 @@ SchemeType SchemeParser::readSexp() {
   else if (tok.type() == TokenType::ID) {
     return SchemeType(tok.id());
   }
+  else if (tok.type() == TokenType::STR) {
+    return SchemeType::userString(tok.id());
+  }
   else if (tok.type() == TokenType::BOOL) {
     return SchemeType::fromBool(tok.boolVal());
   }
@@ -369,6 +410,7 @@ SchemeType SchemeParser::readSexpList(bool allowDot) {
   else if (tok.type() == TokenType::INT ||
            tok.type() == TokenType::BOOL ||
            tok.type() == TokenType::ID ||
+           tok.type() == TokenType::STR ||
            tok.type() == TokenType::QUOTE) {
     tok_.unget(std::move(tok));
     SchemeType sexpForTok(readSexp());
@@ -422,7 +464,40 @@ struct SchemeClosure {
   vector<string> argNames_;
   string restArgName_;
   function<SchemeType(shared_ptr<Frame>)> expr_;
+
+  SchemeType apply(vector<SchemeType>& eArgs);
 };
+
+SchemeType SchemeClosure::apply(vector<SchemeType>& eArgs) {
+  // Create new environment frame.
+  auto newEnv = make_shared<Frame>(env_);
+
+  int i = 0;
+  // Bind arguments to values in the new frame
+  for (const string& argName : argNames_) {
+    if (i >= eArgs.size()) {
+      (*newEnv)[argName] = schemeNil;
+    }
+    else {
+      (*newEnv)[argName] = eArgs[i];
+    }
+    i++;
+  }
+
+  // arguments left over?
+    if (!restArgName_.empty() && i < eArgs.size()) {
+      (*newEnv)[restArgName_] =
+          std::accumulate(
+              eArgs.rbegin(),
+              eArgs.rbegin() + (eArgs.size() - i),
+              schemeNil,
+              [](SchemeType& sofar, SchemeType& i) {
+                return SchemeType(i, sofar);
+              });
+    }
+
+    return expr_(newEnv);
+}
 
 //-----------------------------------------------------------------------------
 bool carIsId(SchemeType& sexp, const string& id) {
@@ -442,6 +517,7 @@ class SchemeAnalyzer {
     switch (sexp.sexpType()) {
     case SchemeType::SexpType::INT:
     case SchemeType::SexpType::BOOL:
+    case SchemeType::SexpType::STR:
       return [sexp](shared_ptr<Frame> env) { return sexp; };
     case SchemeType::SexpType::ID:
       return [sexp](shared_ptr<Frame> env) {
@@ -495,7 +571,7 @@ class SchemeAnalyzer {
           vector<SchemeType> args;
           std::copy(begin(sexp.cdr()), end(sexp.cdr()),
                     back_inserter(args));
-          return applyClosure(sc, args);
+          return sc->apply(args);
         }
       }
       return SchemeType(expandMacros_(sexp.car(), did_stuff),
@@ -627,38 +703,6 @@ class SchemeAnalyzer {
     };
   }
 
-  SchemeType applyClosure(shared_ptr<SchemeClosure> closure,
-                          vector<SchemeType>& eArgs) {
-    // Create new environment frame.
-    auto newEnv = make_shared<Frame>(closure->env_);
-
-    int i = 0;
-    // Bind arguments to values in the new frame
-    for (const string& argName : closure->argNames_) {
-      if (i >= eArgs.size()) {
-        (*newEnv)[argName] = schemeNil;
-      }
-      else {
-        (*newEnv)[argName] = eArgs[i];
-      }
-      i++;
-    }
-
-    // arguments left over?
-    if (!closure->restArgName_.empty() && i < eArgs.size()) {
-      (*newEnv)[closure->restArgName_] =
-          std::accumulate(
-              eArgs.rbegin(),
-              eArgs.rbegin() + (eArgs.size() - i),
-              schemeNil,
-              [](SchemeType& sofar, SchemeType& i) {
-                return SchemeType(i, sofar);
-              });
-    }
-
-    return closure->expr_(newEnv);
-  }
-
   Expr analyzeApplication(SchemeType& sexp) {
     Expr analyzedFunc = analyze(sexp.car());
     vector<Expr> analyzedArgs;
@@ -681,7 +725,7 @@ class SchemeAnalyzer {
       } else {
         assert(eFunc.sexpType() == SchemeType::SexpType::CLOSURE);
         auto closure = eFunc.closure();
-        return applyClosure(closure, eArgs);
+        return closure->apply(eArgs);
       }
     };
   }
@@ -767,12 +811,23 @@ bool interpret(const char* filename,
 
   while (in->good()) {
     SchemeType sexp(p.readSexp());
-    cout << "-->> " << sexp << endl;
-    auto e_sexp(analyzer.expandMacros(sexp));
-    auto expr = analyzer.analyze(e_sexp);
-    auto r_sexp = expr(env);
-    cout << r_sexp << endl;
-    cout << "------- " << endl;
+
+    if (carIsId(sexp, "import")) {
+      cout << sexp << endl << sexp.cdr() << endl;
+
+      if (!interpret(sexp.cdr().car().str().c_str(),
+                     analyzer, env)) {
+        return false;
+      }
+    }
+    else {
+      cout << "-->> " << sexp << endl;
+      auto e_sexp(analyzer.expandMacros(sexp));
+      auto expr = analyzer.analyze(e_sexp);
+      auto r_sexp = expr(env);
+      cout << r_sexp << endl;
+      cout << "------- " << endl;
+    }
   }
 
   return true;

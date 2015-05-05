@@ -1,4 +1,5 @@
 
+(import "lib.scm")
 
 ;; curried function
 (define make-adder 
@@ -9,14 +10,6 @@
 
 ;; restargs lambda
 ((lambda (first . rest) rest) 1 2 3 4)
-
-(define begin
-  (lambda (stm . rest)
-    (cons (cons 'lambda
-                (cons '()
-                      (cons stm
-                            rest))) '())))
-(macroify begin)
 
 (begin 5 6 7)
 
