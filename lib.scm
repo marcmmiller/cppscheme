@@ -1,14 +1,13 @@
-
 ;;
-;; Scheme minimal library that assumes a scheme interpreter
+;; Minimal Scheme library that assumes a Scheme interpreter
 ;; with the following features:
 ;;
 ;; Special forms:
-;;  lambda (with "rest" support)
+;;  lambda (with varargs support)
 ;;  and
 ;;  or
-;;  (define x <something>) form
-;;  macroify
+;;  define
+;;  macroify (very basic macro support)
 ;;
 ;; Builtin functions:
 ;;  apply
@@ -19,36 +18,33 @@
 ;;  null?
 ;;  pair?
 ;;
-(define begin
-  (lambda (stm . rest)
-    (cons (cons 'lambda
-                (cons '()
-                      (cons stm
-                            rest))) '())))
+(define (begin stm . rest)
+  (cons (cons 'lambda
+              (cons '()
+                    (cons stm
+                          rest))) '()))
 (macroify begin)
 
-(define list
-  (lambda (first . rest)
-    (cons first rest)))
+(define (list first . rest)
+  (cons first rest))
 
-(define if
-  (lambda (_test _t _f)
-    (list 'or (list 'and _test _t) _f)))
+;; TODO: this should support _f as a body
+(define (if _test _t _f)
+  (list 'or (list 'and _test _t) _f))
 (macroify if)
 
-(define not
-  (lambda (x) (if x #f #t)))
+(define (not x) (if x #f #t))
 
-(define map 
+(define map
   (lambda (func list1 . more-lists)
-    (define some? 
+    (define some?
       (lambda (func list)
-        ;; returns #f if (func x) returns #t for 
+        ;; returns #f if (func x) returns #t for
         ;; some x in the list
         (and (pair? list)
              (or (func (car list))
                  (some? func (cdr list))))))
-    (define map1 
+    (define map1
       (lambda (func list)
         ;; non-variadic map.  Returns a list whose elements
         ;; the result of calling func with corresponding
@@ -66,17 +62,33 @@
                  (apply map func (map1 cdr lists)))))
      (cons list1 more-lists))))
 
-(define append 
-  (lambda (l m)
-    (if (null? l) m
-        (cons (car l) (append (cdr l) m)))))
+(define (append l m)
+  (if (null? l) m
+      (cons (car l) (append (cdr l) m))))
 
-;;
-;; need 'apply' for this to work
-;; (define map
-;;   (lambda (func . lst)
-;;     (if (null? (car lst))
-;;         '()
-;;         (cons (apply func (one-map car lst))
-;;               (apply map func (one-map cdr lst))))))
+(define cadr
+  (lambda (p)
+    (car (cdr p))))
 
+;; parallel-binding "let"
+(define let
+  (lambda (forms . body)
+    (cons (append (cons 'lambda (list (map car forms)))
+                  body)
+          (map cadr forms))))
+(macroify let)
+
+;; "cond" macro
+(define (cond f . rest)
+  (define (inner clauses)
+    (if (null? clauses)
+        '()
+        (let ((clause (car clauses))) ;; clause is like ((eq? a b) a)
+          (if (eq? (car clause) 'else)
+              (cadr clause)
+              (append (append (list 'if (car clause)) (cdr clause))
+                      (list (inner (cdr clauses))))))))
+  (inner (cons f rest)))
+(macroify cond)
+
+(define-macro testmacro (lambda () 5))

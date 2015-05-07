@@ -144,6 +144,7 @@ string Tokenizer::readQuotedString_() {
     }
     sofar += p;
   }
+  return "";
 }
 
 class SchemeType;
@@ -224,6 +225,7 @@ class SchemeType {
 bool SchemeType::eq(SchemeType& other) {
   if (ty_ != other.ty_) return false;
   switch (ty_) {
+  case SexpType::STR:
   case SexpType::ID:
     // TODO use ATOMs
     return id_ == other.id_;
@@ -329,6 +331,7 @@ void SchemeType::print(ostream& os) {
 
 ostream& operator<<(ostream& os, SchemeType& st) {
   st.print(os);
+  return os;
 }
 
 // TODO: this implementation assumes the last element is nil
@@ -539,6 +542,7 @@ class SchemeAnalyzer {
     case SchemeType::SexpType::INT:
     case SchemeType::SexpType::BOOL:
     case SchemeType::SexpType::STR:
+    case SchemeType::SexpType::NIL:
       return [sexp](shared_ptr<Frame> env) { return sexp; };
     case SchemeType::SexpType::ID:
       return [sexp](shared_ptr<Frame> env) {
@@ -556,6 +560,8 @@ class SchemeAnalyzer {
       else if (carIsId(sexp, "macroify"))
         return analyzeMacroify(sexp.cdr());
       else if (carIsId(sexp, "define"))
+        return analyzeDefine(sexp.cdr());
+      else if (carIsId(sexp, "define-macro"))
         return analyzeDefine(sexp.cdr());
       else if (carIsId(sexp, "quote"))
         return analyzeQuote(sexp.cdr());
@@ -584,7 +590,10 @@ class SchemeAnalyzer {
 
   SchemeType expandMacros_(SchemeType& sexp, bool* did_stuff) {
     if (sexp.sexpType() == SchemeType::SexpType::CONS) {
-      if (sexp.car().sexpType() == SchemeType::SexpType::ID) {
+      if (carIsId(sexp, "quote")) {
+        return sexp;
+      }
+      else if (sexp.car().sexpType() == SchemeType::SexpType::ID) {
         auto i = macro_table_.find(sexp.car().id());
         if (i != macro_table_.end()) {
           *did_stuff = true;
@@ -616,6 +625,17 @@ class SchemeAnalyzer {
     while(did_stuff);
 
     return s;
+  }
+
+  Expr analyzeDefineMacro(SchemeType& sexp) {
+    // sexp is (macro-name <value>)
+    string macro_name = sexp.car().id();
+    Expr analyzedValue = analyze(sexp.cdr().car());
+    return [this, macro_name, analyzedValue](shared_ptr<Frame> env) {
+      // todo: support non-closure values
+      macro_table_[macro_name] = analyzedValue(env).closure();
+      return SchemeType::fromBool(true);
+    };
   }
 
   Expr analyzeMacroify(SchemeType& sexp) {
@@ -675,14 +695,27 @@ class SchemeAnalyzer {
   }
 
   Expr analyzeDefine(SchemeType& sexp) {
-    string id = sexp.car().id();
-    Expr val = analyze(sexp.cdr().car());
+    string id;
+    Expr val;
+    if (sexp.car().isCons()) {
+      // sexp is like ((funcname arg1 arg2) body)
+      SchemeType lambdaSexp(sexp.car().cdr(), sexp.cdr());
+      id = sexp.car().car().id();
+      val = analyzeLambda(lambdaSexp);
+    }
+    else {
+      id = sexp.car().id();
+      val = analyze(sexp.cdr().car());
+    }
     return [id, val](shared_ptr<Frame> env) {
       (*env)[id] = val(env);
       return schemeNil;
     };
   }
 
+  //
+  // Assumes that sexp is of the form: ((arg1 arg2) body)
+  //
   Expr analyzeLambda(SchemeType& sexp) {
     // Extract the argument names -- those are in the car.
     vector<string> argNames;
@@ -777,8 +810,8 @@ void setupEnv(shared_ptr<Frame> env) {
   (*env)["pair?"] = SchemeType(
       [](vector<SchemeType>& args) {
         return make_shared<SchemeType>(
-            SchemeType::fromBool(
-                args[0].sexpType() == SchemeType::SexpType::CONS));
+          SchemeType::fromBool(
+            args[0].sexpType() == SchemeType::SexpType::CONS));
       });
   (*env)["null?"] = SchemeType(
       [](vector<SchemeType>& args) {
@@ -857,14 +890,14 @@ bool interpret(const char* filename,
 
 
 //-----------------------------------------------------------------------------
-int main(int argc, char* argv[]) {
+int main(int argc, const char* argv[]) {
   SchemeAnalyzer a;
   shared_ptr<Frame> env = make_shared<Frame>(nullptr);
   setupEnv(env);
 
   if (argc == 1) {
     argc = 2;
-    char* bogus[] = { "--", "--" };
+    const char* bogus[] = { "--", "--" };
     argv = bogus;
   }
   for (int i = 1; i < argc; ++i) {
