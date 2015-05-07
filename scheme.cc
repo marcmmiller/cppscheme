@@ -201,6 +201,7 @@ class SchemeType {
   bool isNil() { return ty_ ==  SexpType::NIL; }
   bool isCons() { return ty_ == SexpType::CONS; }
   bool isId() { return ty_ == SexpType::ID; }
+  bool isNum() { return ty_ == SexpType::NUM; }
 
   bool toBool() {
     return (ty_ == SexpType::BOOL && boolVal_) ||
@@ -776,8 +777,24 @@ class SchemeAnalyzer {
   }
 };
 
+// Helper to make math environment expressions.
+void envMath(shared_ptr<Frame> env, const string& op,
+             function(int(int, int)) impl) {
+  (*env)[op] = SchemeType(
+    [](vector<SchemeType>& args) {
+        return make_shared<SchemeType>(
+            std::accumulate(args.begin(), args.end(), 0,
+                            [](int a, SchemeType& b) {
+                              assert(b.isnum())
+                              return impl(a, b.num());
+                            }));
+      });
+}
+
 //-----------------------------------------------------------------------------
 void setupEnv(shared_ptr<Frame> env) {
+  envMath(env, "+", [](int a, int b) { return a + b; });
+  envMath(env, "-", [](int a, int b) { return a - b; });
   (*env)["+"] = SchemeType(
       [](vector<SchemeType>& args) {
         return make_shared<SchemeType>(
