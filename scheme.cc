@@ -29,6 +29,12 @@ using std::vector;
 
 using Number = double;
 
+// TODO:
+//  - lexer support for quasiquotation
+//  - tail recursion elimination (use trampoline or exceptions)
+//  - refactor analyzer to allow for compiler plug-in
+
+
 //-----------------------------------------------------------------------------
 // Lexer
 //-----------------------------------------------------------------------------
@@ -576,12 +582,10 @@ class SchemeAnalyzer {
     case SchemeType::SexpType::CONS:
       if (carIsId(sexp, "lambda"))
         return analyzeLambda(sexp.cdr());
-      else if (carIsId(sexp, "macroify"))
-        return analyzeMacroify(sexp.cdr());
       else if (carIsId(sexp, "define"))
         return analyzeDefine(sexp.cdr());
       else if (carIsId(sexp, "define-macro"))
-        return analyzeDefine(sexp.cdr());
+        return analyzeDefineMacro(sexp.cdr());
       else if (carIsId(sexp, "quote"))
         return analyzeQuote(sexp.cdr());
       else if (carIsId(sexp, "and"))
@@ -605,6 +609,7 @@ class SchemeAnalyzer {
     }
   }
 
+  // TODO: support macros that map to any scheme type, not just closures
   unordered_map<string, shared_ptr<SchemeClosure> > macro_table_;
 
   SchemeType expandMacros_(SchemeType& sexp, bool* did_stuff) {
@@ -654,21 +659,6 @@ class SchemeAnalyzer {
       // todo: support non-closure values
       macro_table_[macro_name] = analyzedValue(env).closure();
       return SchemeType::fromBool(true);
-    };
-  }
-
-  Expr analyzeMacroify(SchemeType& sexp) {
-    string macro_name = sexp.car().id();
-    return [this, macro_name](shared_ptr<Frame> env) {
-      auto frame = env->findFrame(macro_name);
-      if (frame) {
-        auto sexp = ((*frame)[macro_name]);
-        if (sexp.closure()) {
-          macro_table_[macro_name] = sexp.closure();
-          return SchemeType::fromBool(true);
-        }
-      }
-      return SchemeType(SchemeType::SexpType::ERR);
     };
   }
 
@@ -802,6 +792,20 @@ class SchemeAnalyzer {
 // Helper to make math environment expressions.
 void envMath(shared_ptr<Frame> env, const string& op,
              function<Number(Number, Number)> impl) {
+  (*env)[op] = SchemeType(
+    [=](vector<SchemeType>& args) {
+        return make_shared<SchemeType>(
+          std::accumulate(args.begin() + 1, args.end(),
+                          args[0].num(),
+                          [=](Number a, SchemeType& b) {
+                            assert(b.isNum());
+                            return impl(a, b.num());
+                          }));
+      });
+}
+
+void envMathCmp(shared_ptr<Frame> env, const string& op,
+                function<bool(Number, Number)> impl) {
   (*env)[op] = SchemeType(
     [=](vector<SchemeType>& args) {
         return make_shared<SchemeType>(

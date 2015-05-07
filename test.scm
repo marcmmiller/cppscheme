@@ -14,17 +14,13 @@
 ;; begin macro
 (begin 5 6 7)
 
-(define *x* (lambda () 5))
-
-(macroify *x*)
-
+(define-macro *x* (lambda () 5))
 (*x*)
 
 ;; very basic macro support
-(define my-if
+(define-macro my-if
   (lambda (_test _t _f)
     (list 'or (list 'and _test _t) _f)))
-(macroify my-if)
 
 (my-if #t 5 6)
 

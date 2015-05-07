@@ -7,7 +7,7 @@
 ;;  and
 ;;  or
 ;;  define
-;;  macroify (very basic macro support)
+;;  define-macro (most basic scheme macro support)
 ;;
 ;; Builtin functions:
 ;;  apply
@@ -18,20 +18,20 @@
 ;;  null?
 ;;  pair?
 ;;
-(define (begin stm . rest)
-  (cons (cons 'lambda
-              (cons '()
-                    (cons stm
-                          rest))) '()))
-(macroify begin)
+(define-macro begin
+  (lambda (stm . rest)
+    (cons (cons 'lambda
+                (cons '()
+                      (cons stm
+                            rest))) '())))
 
 (define (list first . rest)
   (cons first rest))
 
 ;; TODO: this should support _f as a body
-(define (if _test _t _f)
-  (list 'or (list 'and _test _t) _f))
-(macroify if)
+(define-macro if
+  (lambda (_test _t _f)
+    (list 'or (list 'and _test _t) _f)))
 
 (define (not x) (if x #f #t))
 
@@ -71,24 +71,21 @@
     (car (cdr p))))
 
 ;; parallel-binding "let"
-(define let
+(define-macro let
   (lambda (forms . body)
     (cons (append (cons 'lambda (list (map car forms)))
                   body)
           (map cadr forms))))
-(macroify let)
 
 ;; "cond" macro
-(define (cond f . rest)
-  (define (inner clauses)
-    (if (null? clauses)
-        '()
-        (let ((clause (car clauses))) ;; clause is like ((eq? a b) a)
-          (if (eq? (car clause) 'else)
-              (cadr clause)
-              (append (append (list 'if (car clause)) (cdr clause))
-                      (list (inner (cdr clauses))))))))
-  (inner (cons f rest)))
-(macroify cond)
-
-(define-macro testmacro (lambda () 5))
+(define-macro cond
+  (lambda (f . rest)
+    (define (inner clauses)
+      (if (null? clauses)
+          '()
+          (let ((clause (car clauses))) ;; clause is like ((eq? a b) a)
+            (if (eq? (car clause) 'else)
+                (cadr clause)
+                (append (append (list 'if (car clause)) (cdr clause))
+                        (list (inner (cdr clauses))))))))
+    (inner (cons f rest))))
