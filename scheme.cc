@@ -27,14 +27,19 @@ using std::string;
 using std::unordered_map;
 using std::vector;
 
+using Number = double;
+
+//-----------------------------------------------------------------------------
+// Lexer
+//-----------------------------------------------------------------------------
 enum class TokenType : char {
-  ID, STR, INT, BOOL, ERR, OP='(', CP=')', DOT='.', QUOTE='\''
+  ID, STR, NUM, BOOL, ERR, EOF_, OP='(', CP=')', DOT='.', QUOTE='\''
 };
 
 class SchemeToken {
  public:
   SchemeToken(const TokenType ty) : ty_(ty) {}
-  SchemeToken(int num) : ty_(TokenType::INT), num_(num) {}
+  SchemeToken(Number num) : ty_(TokenType::NUM), num_(num) {}
   SchemeToken(string id) : ty_(TokenType::ID), id_(id) {}
   SchemeToken(bool b) : ty_(TokenType::BOOL), boolVal_(b) { }
 
@@ -45,13 +50,13 @@ class SchemeToken {
   }
 
   TokenType type() { return ty_; }
-  int num() { return num_; }
+  Number num() { return num_; }
   const string& id() { return id_; }
   string& take_id() { return id_; }
   bool boolVal() { return boolVal_; }
 
   TokenType ty_;
-  int num_;
+  Number num_;
   string id_;
   bool boolVal_;
 };
@@ -60,10 +65,9 @@ bool isSchemeId(char p) {
   return (isalpha(p) ||
           (p == '-') || (p == '_') || (p == '*') ||
           (p == '+') || (p == '?') || (p == '-') ||
-          (p == '!'));
+          (p == '!') || (p == '/'));
 }
 
-//-----------------------------------------------------------------------------
 class Tokenizer {
  public:
   Tokenizer(istream& is) : is_(is) {}
@@ -118,7 +122,7 @@ SchemeToken Tokenizer::next() {
       return SchemeToken(std::move(id));
     }
     else if (isdigit(p)) {
-      int num;
+      Number num;
       is_.unget();
       is_ >> num;
       return SchemeToken(num);
@@ -126,7 +130,13 @@ SchemeToken Tokenizer::next() {
     else if (p == '(' || p == ')' || p == '.' || p == '\'') {
       return SchemeToken((TokenType)p);
     }
-    return SchemeToken(TokenType::ERR);
+    if (is_.eof()) {
+      return SchemeToken(TokenType::EOF_);
+    }
+    else {
+      cerr << "Lexer error: " << p << endl;
+      return SchemeToken(TokenType::ERR);
+    }
   }
 }
 
@@ -147,6 +157,9 @@ string Tokenizer::readQuotedString_() {
   return "";
 }
 
+//-----------------------------------------------------------------------------
+// Type System
+//-----------------------------------------------------------------------------
 class SchemeType;
 class SchemeClosure;
 
@@ -155,15 +168,14 @@ class SchemeClosure;
 //  Bummer that these have to be heap-allocated but oh well...
 using BuiltinFunc = function<shared_ptr<SchemeType>(vector<SchemeType>&)>;
 
-//-----------------------------------------------------------------------------
 class SchemeType {
  public:
   // Alternatively, should we use inheritance and polymorphism?
   enum class SexpType {
-    ID, INT, BOOL, STR, ERR, CONS, BUILTIN, CLOSURE, NIL
+    ID, NUM, BOOL, STR, EOF_, ERR, CONS, BUILTIN, CLOSURE, NIL
   };
 
-  SchemeType(int num) : ty_(SexpType::INT), num_(num) { }
+  SchemeType(Number num) : ty_(SexpType::NUM), num_(num) { }
   SchemeType(string id) : ty_(SexpType::ID), id_(id) { }
   SchemeType() : ty_(SexpType::ERR) { }
   SchemeType(SexpType ty) : ty_(ty) { }
@@ -191,17 +203,18 @@ class SchemeType {
   SexpType sexpType() { return ty_; }
   const string& id() const { return id_; }
   const string& str() const { return id_; }
-  int num() { return num_; }
+  Number num() { return num_; }
   bool boolVal() { return boolVal_; }
   SchemeType& car() { return cons_->first;  }
   SchemeType& cdr() { return cons_->second; }
   BuiltinFunc& builtin() { return builtin_; }
   shared_ptr<SchemeClosure> closure() { return closure_; }
 
-  bool isNil() { return ty_ ==  SexpType::NIL; }
+  bool isNil()  { return ty_ == SexpType::NIL;  }
   bool isCons() { return ty_ == SexpType::CONS; }
-  bool isId() { return ty_ == SexpType::ID; }
-  bool isNum() { return ty_ == SexpType::NUM; }
+  bool isId()   { return ty_ == SexpType::ID;   }
+  bool isNum()  { return ty_ == SexpType::NUM;  }
+  bool isEof()  { return ty_ == SexpType::EOF_; }
 
   bool toBool() {
     return (ty_ == SexpType::BOOL && boolVal_) ||
@@ -214,7 +227,7 @@ class SchemeType {
 
  private:
   SexpType ty_;
-  int num_;
+  Number num_;
   string id_;
   bool boolVal_;
 
@@ -230,7 +243,7 @@ bool SchemeType::eq(SchemeType& other) {
   case SexpType::ID:
     // TODO use ATOMs
     return id_ == other.id_;
-  case SexpType::INT:
+  case SexpType::NUM:
     return num_ == other.num_;
   case SexpType::BOOL:
     return boolVal_ == other.boolVal_;
@@ -241,9 +254,9 @@ bool SchemeType::eq(SchemeType& other) {
     // OOPS NOT SUPPORTED! return builtin_ == other.builtin_;
   case SexpType::CLOSURE:
     return closure_ == other.closure_;
-  case SexpType::ERR:
-    return true;
   case SexpType::NIL:
+  case SexpType::ERR:
+  case SexpType::EOF_:
     return true;
   }
 }
@@ -292,7 +305,7 @@ void SchemeType::print(ostream& os) {
     case SexpType::STR:
       os << '\"' << id_ << '\"';
       break;
-    case SexpType::INT:
+    case SexpType::NUM:
       os << num_;
       break;
     case SexpType::BOOL:
@@ -324,6 +337,9 @@ void SchemeType::print(ostream& os) {
     case SexpType::CLOSURE:
       os << "*CLOSURE*";
       break;
+    case SexpType::EOF_:
+      os << "*EOF*";
+      break;
     default:
       os << "*ERROR*";
       break;
@@ -352,6 +368,8 @@ SchemeType mapCar(function<SchemeType(SchemeType&)> fn,
 }
 
 //-----------------------------------------------------------------------------
+// Parser
+//-----------------------------------------------------------------------------
 class SchemeParser {
  public:
   SchemeParser(Tokenizer& tok) : tok_(tok) { }
@@ -365,31 +383,24 @@ class SchemeParser {
 
 SchemeType SchemeParser::readSexp() {
   SchemeToken tok = tok_.next();
-  if (tok.type() == TokenType::ERR) {
+  switch (tok.type()) {
+  case TokenType::ERR:
     return SchemeType();
-  }
-  else if (tok.type() == TokenType::INT) {
+  case TokenType::NUM:
     return SchemeType(tok.num());
-  }
-  else if (tok.type() == TokenType::ID) {
+  case TokenType::ID:
     return SchemeType(tok.id());
-  }
-  else if (tok.type() == TokenType::STR) {
+  case TokenType::STR:
     return SchemeType::userString(tok.id());
-  }
-  else if (tok.type() == TokenType::BOOL) {
+  case TokenType::BOOL:
     return SchemeType::fromBool(tok.boolVal());
-  }
-  else if (tok.type() == TokenType::OP) {
+  case TokenType::OP:
     return readSexpList(false);
-  }
-  else if (tok.type() == TokenType::QUOTE) {
+  case TokenType::QUOTE:
     return SchemeType(SchemeType("quote"),
                       SchemeType(readSexp(), schemeNil));
-  }
-  else {
-    cerr << "syntax error" << endl;
-    return SchemeType();
+  case TokenType::EOF_:
+    return SchemeType(SchemeType::SexpType::EOF_);
   }
 }
 
@@ -411,7 +422,7 @@ SchemeType SchemeParser::readSexpList(bool allowDot) {
     SchemeType sCdr(readSexpList(true));
     return SchemeType(std::move(sCar), std::move(sCdr));
   }
-  else if (tok.type() == TokenType::INT ||
+  else if (tok.type() == TokenType::NUM ||
            tok.type() == TokenType::BOOL ||
            tok.type() == TokenType::ID ||
            tok.type() == TokenType::STR ||
@@ -427,6 +438,9 @@ SchemeType SchemeParser::readSexpList(bool allowDot) {
 }
 
 //-----------------------------------------------------------------------------
+// Symbol Table
+//-----------------------------------------------------------------------------
+
 // TODO: should use interned atoms
 using Symtab = unordered_map<string, SchemeType>;
 
@@ -462,6 +476,8 @@ class Frame : public Symtab,
   shared_ptr<Frame> next_;
 };
 
+//-----------------------------------------------------------------------------
+// Closures
 //-----------------------------------------------------------------------------
 struct SchemeClosure {
   shared_ptr<Frame> env_;
@@ -508,6 +524,10 @@ SchemeType SchemeClosure::apply(vector<SchemeType>& eArgs) {
   return expr_(newEnv);
 }
 
+
+//-----------------------------------------------------------------------------
+// Semantic Analyzer
+//-----------------------------------------------------------------------------
 SchemeType callFunc(
     SchemeType& func,
     vector<SchemeType>& args) {
@@ -524,7 +544,6 @@ SchemeType callFunc(
   }
 }
 
-//-----------------------------------------------------------------------------
 bool carIsId(SchemeType& sexp, const string& id) {
   if (sexp.sexpType() == SchemeType::SexpType::CONS) {
     SchemeType& car = sexp.car();
@@ -534,13 +553,12 @@ bool carIsId(SchemeType& sexp, const string& id) {
   return false;
 }
 
-//-----------------------------------------------------------------------------
 class SchemeAnalyzer {
  public:
   using Expr = function<SchemeType(shared_ptr<Frame>)>;
   Expr analyze(SchemeType& sexp) {
     switch (sexp.sexpType()) {
-    case SchemeType::SexpType::INT:
+    case SchemeType::SexpType::NUM:
     case SchemeType::SexpType::BOOL:
     case SchemeType::SexpType::STR:
     case SchemeType::SexpType::NIL:
@@ -777,32 +795,31 @@ class SchemeAnalyzer {
   }
 };
 
+//-----------------------------------------------------------------------------
+// Environment & Builtin Functions
+//-----------------------------------------------------------------------------
+
 // Helper to make math environment expressions.
 void envMath(shared_ptr<Frame> env, const string& op,
-             function(int(int, int)) impl) {
+             function<Number(Number, Number)> impl) {
   (*env)[op] = SchemeType(
-    [](vector<SchemeType>& args) {
+    [=](vector<SchemeType>& args) {
         return make_shared<SchemeType>(
-            std::accumulate(args.begin(), args.end(), 0,
-                            [](int a, SchemeType& b) {
-                              assert(b.isnum())
-                              return impl(a, b.num());
-                            }));
+          std::accumulate(args.begin() + 1, args.end(),
+                          args[0].num(),
+                          [=](Number a, SchemeType& b) {
+                            assert(b.isNum());
+                            return impl(a, b.num());
+                          }));
       });
 }
 
-//-----------------------------------------------------------------------------
 void setupEnv(shared_ptr<Frame> env) {
-  envMath(env, "+", [](int a, int b) { return a + b; });
-  envMath(env, "-", [](int a, int b) { return a - b; });
-  (*env)["+"] = SchemeType(
-      [](vector<SchemeType>& args) {
-        return make_shared<SchemeType>(
-            std::accumulate(args.begin(), args.end(), 0,
-                            [](int a, SchemeType& b) {
-                              return a + b.num();
-                            }));
-      });
+  envMath(env, "+", [](Number a, Number b) { return a + b; });
+  envMath(env, "*", [](Number a, Number b) { return a * b; });
+  envMath(env, "-", [](Number a, Number b) { return a - b; });
+  envMath(env, "/", [](Number a, Number b) { return a / b; });
+
   (*env)["eq?"] = SchemeType(
       [](vector<SchemeType>& args) {
         return make_shared<SchemeType>(
@@ -839,7 +856,12 @@ void setupEnv(shared_ptr<Frame> env) {
   (*env)["display"] = SchemeType(
       [](vector<SchemeType>& args) {
         for (auto a : args) {
-          cout << a;
+          if (a.sexpType() == SchemeType::SexpType::STR) {
+            cout << a.str(); // no quotes
+          }
+          else {
+            cout << a;
+          }
         }
         return make_shared<SchemeType>(schemeNil);
       });
@@ -885,6 +907,10 @@ bool interpret(const char* filename,
 
   while (in->good()) {
     SchemeType sexp(p.readSexp());
+
+    if (sexp.isEof()) {
+      break;
+    }
 
     if (carIsId(sexp, "import")) {
       if (!interpret(sexp.cdr().car().str().c_str(),
