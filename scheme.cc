@@ -71,7 +71,10 @@ bool isSchemeId(char p) {
   return (isalpha(p) ||
           (p == '-') || (p == '_') || (p == '*') ||
           (p == '+') || (p == '?') || (p == '-') ||
-          (p == '!') || (p == '/'));
+          (p == '!') || (p == '/') || (p == '<') ||
+          (p == '>') || (p == '=') || (p == '$') ||
+          (p == '%') || (p == '&') || (p == '~') ||
+          (p == '^'));
 }
 
 class Tokenizer {
@@ -390,6 +393,8 @@ class SchemeParser {
 SchemeType SchemeParser::readSexp() {
   SchemeToken tok = tok_.next();
   switch (tok.type()) {
+  case TokenType::DOT:
+  case TokenType::CP:
   case TokenType::ERR:
     return SchemeType();
   case TokenType::NUM:
@@ -808,14 +813,15 @@ void envMathCmp(shared_ptr<Frame> env, const string& op,
                 function<bool(Number, Number)> impl) {
   (*env)[op] = SchemeType(
     [=](vector<SchemeType>& args) {
-        return make_shared<SchemeType>(
-          std::accumulate(args.begin() + 1, args.end(),
-                          args[0].num(),
-                          [=](Number a, SchemeType& b) {
-                            assert(b.isNum());
-                            return impl(a, b.num());
-                          }));
-      });
+      for (int i = 0; i < args.size() - 1;) {
+        Number a = args[i].num();
+        Number b = args[++i].num();
+        if (!impl(a, b)) {
+          return make_shared<SchemeType>(SchemeType::fromBool(false));
+        }
+      }
+      return make_shared<SchemeType>(SchemeType::fromBool(true));
+    });
 }
 
 void setupEnv(shared_ptr<Frame> env) {
@@ -823,6 +829,10 @@ void setupEnv(shared_ptr<Frame> env) {
   envMath(env, "*", [](Number a, Number b) { return a * b; });
   envMath(env, "-", [](Number a, Number b) { return a - b; });
   envMath(env, "/", [](Number a, Number b) { return a / b; });
+
+  envMathCmp(env, "=", [](Number a, Number b) { return a == b; });
+  envMathCmp(env, "<", [](Number a, Number b) { return a < b; });
+  envMathCmp(env, ">", [](Number a, Number b) { return a > b; });
 
   (*env)["eq?"] = SchemeType(
       [](vector<SchemeType>& args) {

@@ -1,4 +1,3 @@
-
 (import "lib.scm")
 
 ;; curried function
@@ -43,4 +42,13 @@
   (cond ((eq? a b) a)
         ((eq? b c) b)
         (else c)))
+
+(= 3 3)
+(= 3 3 3)
+
+(< 4 3)
+(< 3 4)
+
+(> 4 3)
+(> 3 4)
 

@@ -23,7 +23,8 @@
     (cons (cons 'lambda
                 (cons '()
                       (cons stm
-                            rest))) '())))
+                            rest)))
+          '())))
 
 (define (list first . rest)
   (cons first rest))
