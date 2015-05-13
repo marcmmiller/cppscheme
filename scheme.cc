@@ -131,6 +131,7 @@ SchemeToken Tokenizer::next() {
       return SchemeToken(std::move(id));
     }
     else if (isdigit(p)) {
+      // TODO handle .42 for inputting a number
       Number num;
       is_.unget();
       is_ >> num;
